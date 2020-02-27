@@ -1,0 +1,625 @@
+/**
+ * Generalized Apollonian Gaskets
+ * C010011012 (@cmarangu) 2019 12/23
+ * 
+ * One of the first projects I actually find a use
+ * for OOP in a long time. I know its the formal way but
+ * I can do anything with arrays and object literals
+ * so I see little use for custom object classes
+ * 
+ * this project i found i might want to check whether an
+ * arbitrary object is an "instanceof" a circle, line, or
+ * hexagon etc so i could find tangent circles to arbitrary
+ * geometric shapes in one function
+ * 
+ * TODO
+ * - This project is big, could post it as a Javascript library on github
+ *   - with copyright notice (want credit for this work im doing)
+ * - Make fill_peapod() and fill arbitrary polygons/circles
+ * - Other two intersections for fill_2lines1obj
+ * - Implement lines in invert_circle
+ * - Can fill 3-soddy with any steiner chain
+ * - Could implement subtract stroke cap from circle radius when render
+ * - to shift, find geodesics perpendicular to shiftth and move each angle to next
+ * - or just invert over circle distance away?
+ * - every point has a hyperbolic_x and hyperbolic_y for a given theta
+ *   for hyperbolic_c chech dist from th3 on surface
+ * - could use triangulation to solve steiner chain from 3 circles
+ * - http://mathforum.org/library/drmath/view/52874.html for quartic
+ * 
+ * 
+ * 2019 12/23: Started (I think)
+ * 2020  1/20: Finished steiner_apollonian(), fill_soddy(), invert_circle(), and invert_point()
+ * 2020  1/29: I have been working alot on fill_peapod(), and I have started and made
+ *             significant progress on the steiner chain inside of steiner thing (i.e
+ *             I found a way to make it for n=3, but need a generalized solution and
+ *             better coloring)
+ * 2020  2/23: Been awhile since I updated the code, I at least have been finding new things to
+ *             keep myself busy with, and that is a good thing(?) Today I begin implementation
+ *             of doyle spirals and also delete some of the older code 
+ * 2020  2/24: Finished doyle spiral code: Figured out how to nest a regular steiner chain rotated
+ *             by shiftth inside of another. Finished circle tangent to 2 lines and one other
+ *             circle!!! This solves so many things!!!
+ * 2020  2/25: Been working on and making alot of progress on this after a while of not as
+ *             frequent work on it. Feels good to be interested in this again; it's the
+ *             funnest, most educational waste of time :) Today I accomplish multiple thing,
+ *             most natable find how to get geodesic circle from bounding circle and 2 angle
+ * 2020  2/26: Made significant progress on the poincare disc mechanics (for the {∞, n} tilings)
+ *             I think made significant progress towards finding out how circle inversion
+ *             distorts angles on a circle with nonzero radius' surface
+ *             
+**/
+
+var minwh = min(width, height);
+var maxwh = max(width, height);
+var supredist = maxwh*sqrt(2)*1.3;
+var infidist = maxwh/400;
+
+var Circle = function(x, y, r) {
+    this.x = x;
+    this.y = y;
+    this.r = r;
+};
+Circle.prototype.render = function() {
+    if (this.r >= 0) {
+        ellipse(this.x, this.y, this.r*2, this.r*2);
+    }
+    else {
+        beginShape();
+        vertex(supredist, supredist);
+        vertex(this.x+supredist, this.y+supredist);
+        vertex(this.x-supredist, this.y+supredist);
+        vertex(this.x-supredist, this.y-supredist);
+        vertex(this.x+supredist, this.y-supredist);
+        vertex(this.x+supredist, this.y);
+        vertex(this.x+abs(this.r), this.y);
+        for (var th=0; th<360; th+=360/30) {
+            vertex(this.x+abs(this.r)*cos(th), this.y+abs(this.r)*sin(-th));
+        }
+        vertex(this.x+abs(this.r), this.y);
+        vertex(this.x+supredist, this.y);
+        endShape(CLOSE);
+    }
+};
+
+var Line = function(x, y, th) {
+    this.x = x;
+    this.y = y;
+    this.th = th > 0 ? th%360 : 360-(360-th)%360;
+    this.r = Infinity;
+};
+Line.prototype.render = function(filled) {
+    if (!filled) {
+        line(
+            this.x-cos(this.th)*supredist*3, this.y-sin(this.th)*supredist*3,
+            this.x+cos(this.th)*supredist*3, this.y+sin(this.th)*supredist*3
+        );
+    }
+    else {
+        pushMatrix();
+        translate(this.x, this.y);
+        rotate(this.th+180);
+        rect(-supredist*3, 0, supredist*3*2, supredist*3);
+        popMatrix();
+    }
+};
+
+var Point = function(x, y) {
+	Circle.call(this, x, y, 0);
+};
+Point.prototype = Object.create(Circle.prototype);
+Point.prototype.render = function() {
+	ellipse(this.x, this.y, 8, 8);
+};
+
+var SteinerSocket = function(circ1, n, cen, shiftth) {
+    this.circle = circ1;
+    this.n = n;
+    this.cen = cen;
+    this.shiftth = shiftth;
+    this.parents = [];
+};
+
+var PoincarePolySocket = function(vertecies) {
+    this.vertecies = [];
+    this.parents = [];
+    this.neighbors = [];
+};
+PoincarePolySocket.prototype.render = function() {
+    beginShape();
+    for (var i in this.vertecies) {
+        vertex(this.vertecies[i].x, this.vertecies[i].y);
+    }
+    endShape(CLOSE);
+};
+
+var invert_point = function(pt1, inv) {
+	var center_dist = dist(inv.x, inv.y, pt1.x, pt1.y);
+	var center_th = atan2(pt1.y-inv.y, pt1.x-inv.x);
+	return new Point(
+	    inv.x+cos(center_th)*inv.r*inv.r/center_dist,
+	    inv.y+sin(center_th)*inv.r*inv.r/center_dist
+	);
+};
+
+var invert_circle = function(circ1, inv) {
+	if (circ1.r < 0.5) {
+		// throw {
+		// message: "bro why u invert such tiny circle"
+		// };
+	}
+	// circle goingjbe line
+	// circle goinjbe circle
+	var center_dist = dist(inv.x, inv.y, circ1.x, circ1.y);
+	var center_th = atan2(circ1.y-inv.y, circ1.x-inv.x);
+	var far_dist  = center_dist+circ1.r;
+	var near_dist = center_dist-circ1.r;
+	far_dist  = inv.r*inv.r/far_dist;
+	near_dist = inv.r*inv.r/near_dist;
+	var inv_center_dist = (far_dist+near_dist)/2;
+	// now far dist is near and near dist is far
+	var inv_circ1 = new Circle(
+		inv.x+inv_center_dist*cos(center_th),
+		inv.y+inv_center_dist*sin(center_th),
+		abs(near_dist-far_dist)/2
+	);
+	if (dist(inv.x, inv.y, circ1.x, circ1.y) < circ1.r) {
+	    inv_circ1.r *= -1;
+	}
+	return inv_circ1;
+};
+
+var are_tangent = function(obj1, obj2) {
+	// potentially add support to se if line/circle contains point
+	// only accept lines and circles!
+	if (obj1 instanceof Line || obj1 instanceof Circle) {
+		if (obj1 instanceof Line || obj1 instanceof Circle) {
+			// ...
+		}
+		else {
+			throw {
+				message: "What Objects are you trying to find if they are_tangent()?? Only currently supports Line()s, and Circle()s!!!"
+			};
+		}
+	}
+	// sort so can only have
+	// Circle, Circle
+	// Line, Circle
+	// Line, Line
+	// in that order
+	if (obj1 instanceof Circle) {
+		if (obj2 instanceof Line) {
+			var obj3 = obj1;
+			obj1 = obj2;
+			obj2 = obj3;
+		}
+	}
+	// actually find if tangent
+	if (obj1 instanceof Line) {
+		if (obj2 instanceof Line) {
+			throw {
+				message: "bro im sorry but i cant tell u if 2 lines are_tangent()!"
+			};
+		}
+		else {
+			var lin1 = obj1;
+			var circ1 = obj2;
+			var relative_zero = circ1.r/100;
+			var offx = circ1.x-lin1.x;
+			var offy = circ1.y-lin1.y;
+			var h = dist(offx, offy, 0, 0);
+			if (h === 0) {
+				return -1;
+			}
+			var noffx = offx/h;
+			var noffy = offy/h;
+			var a = h/(noffx*cos(lin1.th)+noffy*sin(lin1.th));
+			var o = sqrt(h*h-a*a);
+			return o < relative_zero ? 1 : 0;
+		}
+	}
+	else if (obj2 instanceof Circle) {
+		var circ1 = obj1;
+		var circ2 = obj2;
+		var center_dist = dist(circ1.x, circ1.y, circ2.x, circ2.y);
+		var relative_zero = min(circ1.r, circ2.r)/100;
+		if (center_dist <  relative_zero) {
+			throw {
+				message: "should not be checking whether circles with the same center are_tangent()!"
+			};
+		}
+		if (circ1.r > center_dist) {
+			return abs(circ1.r-circ2.r-center_dist) < relative_zero;
+		}
+		else if (circ2.r > center_dist) {
+			return abs(circ2.r-circ1.r-center_dist) < relative_zero;
+		}
+		else {
+			return abs(circ1.r+circ2.r-center_dist) < relative_zero;
+		}
+	}
+};
+
+var fill_2lines1obj = function(lin1, lin2, obj1, sign04, shift01) {
+    if (lin1 instanceof Line && lin2 instanceof Line === false) {
+        throw {
+            message: "fill_2lines1obj takes input of two lines as first two arguments!"
+        };
+    }
+    var circles = [];
+    var sockets = [];
+    var th = (lin2.th+180-lin1.th);
+    var lin3 = new Line(0, 0, lin1.th+th/2);
+    var x1 = lin1.x;
+    var x2 = lin2.x;
+    var y1 = lin1.y;
+    var y2 = lin2.y;
+    // y = mx+c/b
+    // by = ax+c
+    // ax-by+c = 0 if m=a/b
+    var a1 = sin(lin1.th);
+    var b1 = cos(lin1.th);
+    var a2 = sin(lin2.th);
+    var b2 = cos(lin2.th);
+    // ax-by+c=0
+    // c = -(ax-by)
+    var c1 = -(a1*x1-b1*y1);
+    var c2 = -(a2*x2-b2*y2);
+    // a1x-b1y+c1 = 0
+    // a2x-b2y+c2 = 0
+    // (a1*b2/b1-a2)x+c1*b2/b1-c2 = 0
+    lin3.x = -(c1*b2/b1-c2)/(a1*b2/b1-a2);
+    lin3.y = a1/b1*lin3.x+c1/b1;
+    // lin3.render();
+    if (obj1 instanceof Circle) {
+        var s = obj1.r;
+        var circ1 = obj1;
+        var ox = cos(th/2);
+        var oy = sin(th/2);
+        var k = tan(th/2);
+        var gx = obj1.x-lin3.x;
+        var gy = obj1.y-lin3.y;
+        var g = sqrt(gy*gy+gx*gx);
+        var th4 = atan2(gy, gx);
+        th4 -= lin1.th;
+        gx = cos(th4)*g;
+        gy = sin(th4)*g;
+        if (sign04 === 0 || sign04 === 4) {
+            var sign = sign04/2-1;
+            var A = 1;
+            var B = -(2*gx+2*gy*k+2*s*k);
+            var C = gx*gx+gy*gy-s*s;
+            var cx = ( -B+sign*sqrt(B*B-4*A*C) )/(2*A);
+            var c = cx/cos(th/2);
+            var r = k*cx;
+            var shiftscl = pow((c-r)/(c+r), shift01*sign);
+            circles.push(
+                new Circle(
+                    lin3.x+cos(lin3.th)*c*shiftscl,
+                    lin3.y+sin(lin3.th)*c*shiftscl,
+                    r*shiftscl
+                )
+            );
+        }
+    }
+    return {
+        circles: circles,
+        sockets: sockets
+    };
+};
+
+var steinersocket_from3circles = function(circ1, circ2, circ3) {
+    // find natural steiner center
+    // rotate, then set center back
+    // return steiner socket with cen_x, cen_y, and shiftth set
+    // accordingly
+    return new SteinerSocket(circ1, 3, new Point(0, 5), 0);
+};
+
+var inv = new Circle(0, 0, 0);
+var fill_soddy = function(iterations, circ1, circ2, circ3, gobigger, n) {
+    var circles = [];
+	if (iterations --> 0) {
+		if (!are_tangent(circ1, circ2) || !are_tangent(circ2, circ3) || !are_tangent(circ3, circ1)) {
+			throw {
+				message: "fill_soddy() is supposed to take input of 3 tangent circles, but if you want to see it glitch and fail you can edit the code!!!"
+			};
+		}
+		// circle 1 should be the biggest, in case it is consuming the other two
+		// hey look a situation where bubble sort is most efficient!
+		if (circ1.r < circ2.r) {
+			if (circ2.r < circ3.r) {
+				var circ4 = circ1;
+				circ1 = circ3;
+				circ3 = circ4;
+			}
+			else {
+				var circ4 = circ1;
+				circ1 = circ2;
+				circ2 = circ4;
+				var circ4 = circ2;
+				circ2 = circ3;
+				circ3 = circ4;
+			}
+		}
+		else if (circ1.r < circ3.r) {
+			var circ4 = circ1;
+			circ1 = circ3;
+			circ3 = circ4;
+			var circ4 = circ2;
+			circ2 = circ3;
+			circ3 = circ4;
+		}
+		var center_th = atan2(circ3.y-circ2.y, circ3.x-circ2.x);
+		inv.x = circ2.x+circ2.r*cos(center_th);
+		inv.y = circ2.y+circ2.r*sin(center_th);
+		inv.r = circ2.r*2;
+		var inv_circ1 = invert_circle(circ1, inv);
+		var inv_circ4_0 = new Circle(
+			inv_circ1.x+inv_circ1.r*cos(center_th-90)*2*1,
+			inv_circ1.y+inv_circ1.r*sin(center_th-90)*2*1,
+			inv_circ1.r
+		);
+		var inv_circ4_1 = new Circle(
+			inv_circ1.x+inv_circ1.r*cos(center_th-90)*2*-1,
+			inv_circ1.y+inv_circ1.r*sin(center_th-90)*2*-1,
+			inv_circ1.r
+		);
+		var circ4_0 = invert_circle(inv_circ4_0, inv);
+		var circ4_1 = invert_circle(inv_circ4_1, inv);
+		var circ4;
+		if (circ4_0.r < circ4_1.r !== gobigger) {
+			circ4 = circ4_0;
+		}
+		else {
+			circ4 = circ4_1;
+		}
+		circles.push(circ4);
+		if (circ4.r >= 2) {
+			fill_soddy(iterations, circ2, circ3, circ4, false);
+			fill_soddy(iterations, circ1, circ2, circ4, false);
+			fill_soddy(iterations, circ1, circ3, circ4, false);
+		}
+	}
+	return circles;
+};
+
+var fill_steiner = function(circ1, n, cen, shiftth) {
+    var circles = [];
+    var sockets = [new SteinerSocket(circ1, n, cen, shiftth)];
+    var th = 360/n;
+    var ox = cos(th/2);
+    var oy = sin(th/2);
+    var k = tan(th/2);
+    var g = 1/( 1+sin(th/2) );
+    var s = sin(th/2)/( 1+sin(th/2) );
+    if (circ1.r > 0) {
+        g /= (1-sin(th/2))/(1+sin(th/2));
+        s = sin(th/2)*g;
+    }
+    for (var i=0; i<n; ++i) {
+        circles.push(new Circle(
+            circ1.x+abs(circ1.r)*cos(i*360/n+shiftth)*g,
+            circ1.y+abs(circ1.r)*sin(i*360/n+shiftth)*g,
+            abs(circ1.r)*s
+        ));
+        sockets[0].parents.push(circles[i]);
+        // the 3-soddy created by this circle, its counter-clockwise
+        // neighbor, and the outer circle
+        if (i >= 1) {
+            sockets.push(new SteinerSocket(
+                circles[i],
+                3,
+                new Point(0, 0),
+                0
+            ));
+        }
+    }
+    return {
+        sockets: sockets,
+        circles: circles
+    };
+};
+
+var fill_doyle = function(steinersocket1, shiftth) {
+    if (!steinersocket1 instanceof SteinerSocket) {
+        throw {
+            message: "fill_doyle() requires a steiner socket and optional angle!"
+        };
+    }
+    var circ1 = steinersocket1.circle;
+    var n = steinersocket1.n;
+    var circles = [];
+    var sockets = [];
+    var middlesockets = [];
+    var th = 360/n;
+    var ox = cos(th/2);
+    var oy = sin(th/2);
+    var k = tan(th/2);
+    var g = 1/( 1+sin(th/2) );
+    var s = sin(th/2)/( 1+sin(th/2) );
+    var sign = -1;
+    var A = 1;
+    var B = -(2*g+2*s*k);
+    var C = g*g-s*s;
+    var cx = ( -B+sign*sqrt(B*B-4*A*C) )/(2*A);
+    var c = cx/cos(th/2);
+    var r = cx*k;
+    var circi;
+    var lin1 = new Line(steinersocket1.circle.x, steinersocket1.circle.y, -th/2);
+    var lin2 = new Line(steinersocket1.circle.x, steinersocket1.circle.y, 180+th/2);
+        // var bob = steinersocket1.circles[(0)%steinersocket1.n];
+        // bob.render();
+        // lin1.th = atan2(bob.y-circ1.y, bob.x-circ1.x)-th+(th*9+shiftth)%th;
+        // lin2.th = 180+lin1.th+th;
+        // circi = fill_2lines1obj(lin1, lin2, bob, 0, 0);
+        // circi.circles[0].render();
+        // lin1.render();
+        // lin2.render();
+    for (var i=0; i<n; ++i) {
+        // circles.push(new Circle(
+        //     circ1.x+circ1.r*cos(i*360/n+steinersocket1.shiftth+shiftth)*c,
+        //     circ1.y+circ1.r*sin(i*360/n+steinersocket1.shiftth+shiftth)*c,
+        //     abs(circ1.r)*r
+        // ));
+        var bob = steinersocket1.parents[(i)%steinersocket1.n];
+        // bob.render();
+        lin1.th = atan2(bob.y-circ1.y, bob.x-circ1.x)-th+(th*9+shiftth)%th;
+        lin2.th = 180+lin1.th+th;
+        circi = fill_2lines1obj(lin1, lin2, bob, 0, 0);
+        // circi.circles[0].render();
+        circles.push(circi.circles[0]);
+        if (i >= 1) {
+            // all of the sockets created by adding this circle
+            // middlesockets.push(
+            //     new SteinerSocket(circles[i], 3, new Point(0, 0), 0)
+            // );
+        }
+    }
+    sockets.push(
+        new SteinerSocket(
+            new Circle(
+                circ1.x,
+                circ1.y,
+                circ1.r*circles[0].r/steinersocket1.circles[1].r
+            ),
+            steinersocket1.n,
+            steinersocket1.cen,
+            steinersocket1.shiftth*0+shiftth+360/n/2
+        )
+    );
+    sockets[0].circles = circles;
+    for (var i in middlesockets) {
+        sockets.push(middlesockets[i]);
+    }
+    return {
+        sockets: sockets,
+        circles: circles
+    };
+};
+
+
+var circle_geodesic = function(circ1, th1, th2) {
+    var th3 = (th1+th2)/2;
+    inv.x = circ1.x+abs(circ1.r)*cos(180+th3);
+    inv.y = circ1.y+abs(circ1.r)*sin(180+th3);
+    inv.r = abs(circ1.r);
+    var pt1 = new Point(circ1.x+abs(circ1.r)*cos(th1), circ1.y+abs(circ1.r)*sin(th1));
+    var pt2 = new Point(circ1.x+abs(circ1.r)*cos(th2), circ1.y+abs(circ1.r)*sin(th2));
+    var inv_pt1 = invert_point(pt1, inv);
+    var inv_pt2 = invert_point(pt2, inv);
+    // inv.render();
+    // pt1.render();
+    // pt2.render();
+    // inv_pt1.render();
+    // inv_pt2.render();
+    var dy = inv_pt2.y-inv_pt1.y;
+    var dx = inv_pt2.x-inv_pt1.x;
+    var inv_geodes1 = new Circle(inv_pt1.x+dx/2, inv_pt1.y+dy/2, sqrt(dy*dy+dx*dx)/2);
+    // inv_geodes1.render();
+    var geodes1 = invert_circle(inv_geodes1, inv);
+    return geodes1;
+};
+
+var gasket_tile_poincare = function(geodesic1_th1, geodesic1_th2, ncorn) {
+};
+
+var fill_poincare = function(circ1, n, ncorn) {
+    var circles = [];
+    var sockets = [];
+    if (n === Infinity) {
+        var lin1 = new Line(circ1.x, circ1.y, 0);
+        var lin2 = new Line(circ1.x, circ1.y, 180+lin1.th+360/ncorn);
+        // lin1.render();
+        // lin2.render();
+        var tri0 = new PoincarePolySocket([]);
+        for (var i=0; i<=ncorn+1; ++i) {
+            var th1 = i*360/ncorn;
+            var th2 = (i+1)*360/ncorn;
+            if (i < ncorn) {
+                var geodesi_circ = circle_geodesic(circ1, th1, th2);
+                pushStyle();
+                noFill();
+                // geodesi_circ.render();
+                popStyle();
+                tri0.vertecies.push(
+                    new Point(circ1.x+abs(circ1.r)*cos(th1), circ1.y+abs(circ1.r)*sin(th1))
+                );
+                tri0.parents[i] = geodesi_circ;
+            }
+            if (i >= 2) {
+                var trii = new PoincarePolySocket([]);
+                trii.vertecies[0] = tri0.vertecies[(i)%ncorn];
+                trii.parents[0] = tri0.parents[i%ncorn];
+                trii.parents[0].render();
+                // trii.vertecies[0].render();
+                for (var ii=1; ii<ncorn; ++ii) {
+                    var th3 = lerp(th1, th2, ((ncorn+ii-1)%ncorn)/(ncorn-1));
+                    var th4 = lerp(th1, th2, (ii%ncorn)/(ncorn-1));
+                    var geodesii_circ = circle_geodesic(circ1, th3, th4);
+                    if (ii < ncorn-1) {
+                        trii.vertecies[ii] = new Point(
+                            circ1.x+abs(circ1.r)*cos(th4),
+                            circ1.y+abs(circ1.r)*sin(th4)
+                        );
+                        // trii.vertecies[ii].render();
+                    }
+                    trii.parents[ii] = geodesii_circ;
+                    // trii.parents[ii].render();
+                }
+                trii.vertecies[ncorn-1] = tri0.vertecies[(i+1)%ncorn];
+                // trii.vertecies[ncorn-1].render();
+                trii.render();
+                // break;
+            }
+        }
+        // tri0.render();
+    }
+    return {
+        circles: circles,
+        sockets: sockets
+    };
+};
+
+background(255);
+translate(200, 200);
+scale(1, -1);
+scale(1);
+strokeWeight(3);
+stroke(0, 150, 260, 100);
+line(-1e4, 0, 1e4, 0);
+line(0, -1e4, 0, 1e4);
+strokeWeight(1);
+stroke(0);
+fill(255, 0, 0, 100);
+
+// noFill();
+
+
+var bob = new Circle(0, 0, -148);
+bob.render();
+
+var poincare1 = fill_poincare(bob, Infinity, 3, 0.0, 0.0);
+for (var c in poincare1.circles) {
+    poincare1.circles[c].render();
+}
+
+resetMatrix();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
