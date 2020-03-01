@@ -1,0 +1,7 @@
+#Circle Fractals
+
+This is a "small" project by Chase Marangu in which he attempts to, more or less, create ALL the Apollonian-Gasket-related fractals. How it will work is, you have a bunch of class methods or funcrions or something, the idea is to say, start with a circle, and then you can say, put a n-steiner-chan in it, and that will create n soddys as well as an n-steiner-socket. Then you will have those neatly in an array and you can fill those using a the same variety of methods/functions, iterate until desired level of detail. And then render circles, or export as JSON, idk
+
+The significance of this project is huge. For one thing, it has almost no practical use. I mean, people make money off of art, but not this. For another, probably millions of people have heard about the Apollonian gasket, and the probably all thogut it was beautiful. This programm will make any apollion gasket. For another thing, Chase Marangu is pushing the boundaries of human knowledge. He solves all the geometry problems he stumbles into on  this rambling with Pen on Paper. Blue pen. Thank you for reading this, now go check out the exampls (not yet existant as of the time of this written) they're probably more interesting.
+
+Feel free to contact him! -somehow idk

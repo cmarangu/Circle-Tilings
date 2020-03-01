@@ -13,19 +13,16 @@
  * geometric shapes in one function
  * 
  * TODO
- * - This project is big, could post it as a Javascript library on github
- *   - with copyright notice (want credit for this work im doing)
  * - Make fill_peapod() and fill arbitrary polygons/circles
  * - Other two intersections for fill_2lines1obj
  * - Implement lines in invert_circle
  * - Can fill 3-soddy with any steiner chain
+ * - Can divide n-SteinerSockets into 3-soddies?
+ * - Can fill circle with 3 angles -> circles
  * - Could implement subtract stroke cap from circle radius when render
- * - to shift, find geodesics perpendicular to shiftth and move each angle to next
- * - or just invert over circle distance away?
- * - every point has a hyperbolic_x and hyperbolic_y for a given theta
- *   for hyperbolic_c chech dist from th3 on surface
- * - could use triangulation to solve steiner chain from 3 circles
- * - http://mathforum.org/library/drmath/view/52874.html for quartic
+ * - For new cells in poincare tiling, invert other geodesics over parent geodesic
+ * - interpolate arc to straight line inversion
+ * - find parameters for log spiral such that circle preserving
  * 
  * 
  * 2019 12/23: Started (I think)
@@ -47,6 +44,18 @@
  * 2020  2/26: Made significant progress on the poincare disc mechanics (for the {∞, n} tilings)
  *             I think made significant progress towards finding out how circle inversion
  *             distorts angles on a circle with nonzero radius' surface
+ * 2020  2/27: I have been working on the math of multiple problems alot in the past 24 hours;
+ *             in particular, I have been trying to solve for how the angle of a point on a
+ *             circle's surface changes when inverted over a "poincare geodesic" i.e. a
+ *             circle "perpendicular" to the first one (they have the neat property that when
+ *             you invert the circle over them the circle surface doesnt move or scale)
+ * 2020  2/28: Successfully finished get_inv_a1a2()! Given a circle, teh angle of a point on its
+ *             surface, and the angle you want, returns the (geodesic) circle of inversion!
+ *             Extremely useful for warping steiner chains.
+ * 2020  2/29: Finished steiner_gasket()! Except for the part where I still need to return all
+ *             the circles and sockets created in an array, and to do that I need to be able to
+ *             get a soddy/3-steiner-socket from 3 circles. Also for this function need to
+ *             implement option of having 2 circles on opposite side instead of 1
  *             
 **/
 
@@ -112,10 +121,119 @@ Point.prototype.render = function() {
 	ellipse(this.x, this.y, 8, 8);
 };
 
-var SteinerSocket = function(circ1, n, cen, shiftth) {
+
+var fixang = function(ang) {
+    ang = ang<0 ? 360-((360-ang)%360) : ang%360;
+    return ang;
+};
+
+var invert_point = function(pt1, inv) {
+    if (inv instanceof Circle) {
+        var dis = inv.r*inv.r/dist(pt1.x, pt1.y, inv.x, inv.y);
+        var ang = atan2(pt1.y-inv.y, pt1.x-inv.x);
+        return new Point(inv.x+dis*cos(ang), inv.y+dis*sin(ang));
+    }
+    if (inv instanceof Line) {
+        // (p-i) some theta from inv.th
+        var dis = dist(pt1.x, pt1.y, inv.x, inv.y);
+        var ang = atan2(pt1.y-inv.y, pt1.x-inv.x);
+        ang = fixang(fixang(inv.th+90)-ang);
+        var inv_pt1 = new Point(
+            inv.x+dis*cos(ang),
+            inv.y+dis*sin(ang)
+        );
+        return inv_pt1;
+    }
+};
+
+var invert_circle = function(circ1, inv) {
+	if (circ1.r < infidist) {
+        // throw {
+        //     message: "bro why u invert such tiny circle"
+        // };
+	}
+    if (inv instanceof Circle) {
+        // circle goingjbe line
+        // circle goinjbe circle
+        var center_dist = dist(inv.x, inv.y, circ1.x, circ1.y);
+        var center_th = atan2(circ1.y-inv.y, circ1.x-inv.x);
+        var far_dist  = center_dist+circ1.r;
+        var near_dist = center_dist-circ1.r;
+        far_dist  = inv.r*inv.r/far_dist;
+        near_dist = inv.r*inv.r/near_dist;
+        var inv_center_dist = (far_dist+near_dist)/2;
+        // now far dist is near and near dist is far
+        var inv_circ1;
+        if (0 <= far_dist && far_dist < Infinity) {
+            inv_circ1 = new Circle(
+                inv.x+inv_center_dist*cos(center_th),
+                inv.y+inv_center_dist*sin(center_th),
+                abs(near_dist-far_dist)/2
+            );
+        }
+        else {
+            inv_circ1 = new Line(
+                inv.x+near_dist*cos(center_th),
+                inv.y+near_dist*sin(center_th),
+                center_th
+            );
+        }
+        if (dist(inv.x, inv.y, circ1.x, circ1.y) < circ1.r) {
+            inv_circ1.r *= -1;
+        }
+        return inv_circ1;
+    }
+    if (inv instanceof Line) {
+        // (p-i) some theta from inv.th
+        var dis = dist(circ1.x, circ1.y, inv.x, inv.y);
+        var ang = atan2(circ1.y-inv.y, circ1.x-inv.x);
+        ang = fixang(fixang(inv.th+90)-ang);
+        var inv_circ1 = new Circle(
+            inv.x+dis*cos(ang),
+            inv.y+dis*sin(ang),
+            circ1.r
+        );
+        return inv_circ1;
+    }
+};
+var inv = new Circle(0, 0, 10);
+
+var circle_geodesic = function(circ1, th1, th2) {
+    var diff = fixang(th2-th1);
+    if (abs(diff-180) < 1) {
+        var sum = 90+(th1+th2)/2;
+        sum = fixang(sum);
+        return new Line(circ1.x, circ1.y, sum);
+    }
+    var th3 = (th1+th2)/2;
+    inv.x = circ1.x+abs(circ1.r)*cos(180+th3);
+    inv.y = circ1.y+abs(circ1.r)*sin(180+th3);
+    inv.r = abs(circ1.r);
+    var pt1 = new Point(circ1.x+abs(circ1.r)*cos(th1), circ1.y+abs(circ1.r)*sin(th1));
+    var pt2 = new Point(circ1.x+abs(circ1.r)*cos(th2), circ1.y+abs(circ1.r)*sin(th2));
+    var inv_pt1 = invert_point(pt1, inv);
+    var inv_pt2 = invert_point(pt2, inv);
+    // inv.render();
+    // pt1.render();
+    // pt2.render();
+    // inv_pt1.render();
+    // inv_pt2.render();
+    var dy = inv_pt2.y-inv_pt1.y;
+    var dx = inv_pt2.x-inv_pt1.x;
+    var inv_geodes1 = new Circle(inv_pt1.x+dx/2, inv_pt1.y+dy/2, sqrt(dy*dy+dx*dx)/2);
+    // inv_geodes1.render();
+    var geodes1 = invert_circle(inv_geodes1, inv);
+    return geodes1;
+};
+
+
+var SteinerSocket = function(circ1, n, shiftth, invccw, invcw) {
     this.circle = circ1;
     this.n = n;
-    this.cen = cen;
+    this.invth1 = invccw;
+    this.invth2 = invcw;
+    this.inv = circle_geodesic(circ1, invccw, invcw);
+    this.inv_mirror = new Line(circ1.x, circ1.y, fixang((invccw+invcw)/2+90));
     this.shiftth = shiftth;
     this.parents = [];
 };
@@ -131,42 +249,6 @@ PoincarePolySocket.prototype.render = function() {
         vertex(this.vertecies[i].x, this.vertecies[i].y);
     }
     endShape(CLOSE);
-};
-
-var invert_point = function(pt1, inv) {
-	var center_dist = dist(inv.x, inv.y, pt1.x, pt1.y);
-	var center_th = atan2(pt1.y-inv.y, pt1.x-inv.x);
-	return new Point(
-	    inv.x+cos(center_th)*inv.r*inv.r/center_dist,
-	    inv.y+sin(center_th)*inv.r*inv.r/center_dist
-	);
-};
-
-var invert_circle = function(circ1, inv) {
-	if (circ1.r < 0.5) {
-		// throw {
-		// message: "bro why u invert such tiny circle"
-		// };
-	}
-	// circle goingjbe line
-	// circle goinjbe circle
-	var center_dist = dist(inv.x, inv.y, circ1.x, circ1.y);
-	var center_th = atan2(circ1.y-inv.y, circ1.x-inv.x);
-	var far_dist  = center_dist+circ1.r;
-	var near_dist = center_dist-circ1.r;
-	far_dist  = inv.r*inv.r/far_dist;
-	near_dist = inv.r*inv.r/near_dist;
-	var inv_center_dist = (far_dist+near_dist)/2;
-	// now far dist is near and near dist is far
-	var inv_circ1 = new Circle(
-		inv.x+inv_center_dist*cos(center_th),
-		inv.y+inv_center_dist*sin(center_th),
-		abs(near_dist-far_dist)/2
-	);
-	if (dist(inv.x, inv.y, circ1.x, circ1.y) < circ1.r) {
-	    inv_circ1.r *= -1;
-	}
-	return inv_circ1;
 };
 
 var are_tangent = function(obj1, obj2) {
@@ -499,26 +581,154 @@ var fill_doyle = function(steinersocket1, shiftth) {
 };
 
 
-var circle_geodesic = function(circ1, th1, th2) {
-    var th3 = (th1+th2)/2;
-    inv.x = circ1.x+abs(circ1.r)*cos(180+th3);
-    inv.y = circ1.y+abs(circ1.r)*sin(180+th3);
-    inv.r = abs(circ1.r);
-    var pt1 = new Point(circ1.x+abs(circ1.r)*cos(th1), circ1.y+abs(circ1.r)*sin(th1));
-    var pt2 = new Point(circ1.x+abs(circ1.r)*cos(th2), circ1.y+abs(circ1.r)*sin(th2));
-    var inv_pt1 = invert_point(pt1, inv);
-    var inv_pt2 = invert_point(pt2, inv);
+var get_inv_a1a2 = function(circ1, th, thp) {
+    if (th >= 360 || thp >= 360 || th < 0 || thp < 0) {
+        throw {
+            message: "get_inv_a1a2() functions with two angles th and thp from 0 to 180 each! They are the angle before 'squish' and the desired angle respectively!"
+        };
+    }
+    var sectorid = 1;
+    if (th >= 180) {
+        sectorid = -1;
+        th = 360-th;
+        thp = 360-thp;
+    }
+    if (abs(th-180) <= 0 || abs(thp-180) <=0 || abs(th) <= 0 || abs(thp) <= 0) {
+        throw {
+            message: "th and thp should not be at the poles in get_inv_a1a2!!!"
+        };
+    }
+    if (th > 180 !== thp > 180) {
+        throw {
+            message: "In get_a1_a2() angle1 must be in the same 'sector' as angle2!"
+        };
+    }
+    var p1 = new Point(circ1.x+circ1.r*cos(sectorid*th), circ1.y+circ1.r*sin(sectorid*th));
+    var s=sin(th), c=cos(th), t=tan(thp);
+    var A = (s+t*c);
+    var B = -2*t;
+    var C = c*t-s;
+    var sign = thp > 90? -1 : 1;
+    var ix = ( -B+sign*sqrt(B*B-4*A*C) )/(2*A);
+    var ith = 2*acos(1/ix);
+    var inv = circle_geodesic(circ1, -ith/2, +ith/2);
+    var inv_p1 = invert_point(p1, inv);
+    if (sectorid < 0) {
+        th = 360-th;
+        thp = 360-thp;
+    }
+    // var p2 = new Point(circ1.x+circ1.r*cos(thp), circ1.y+circ1.r*sin(thp));
     // inv.render();
-    // pt1.render();
-    // pt2.render();
-    // inv_pt1.render();
-    // inv_pt2.render();
-    var dy = inv_pt2.y-inv_pt1.y;
-    var dx = inv_pt2.x-inv_pt1.x;
-    var inv_geodes1 = new Circle(inv_pt1.x+dx/2, inv_pt1.y+dy/2, sqrt(dy*dy+dx*dx)/2);
-    // inv_geodes1.render();
-    var geodes1 = invert_circle(inv_geodes1, inv);
-    return geodes1;
+    // p1.render();
+    // inv_p1.render();
+    // p2.render();
+    // ellipse(p2.x, p2.y, 20, 20);
+    return fixang(ith);
+};
+
+var gasket_steiner = function(iterations, circ1, n, n2, thccw, thcw) {
+    if (iterations --> 0 && circ1.r > infidist*2) {} else {
+        point(circ1.x, circ1.y);
+        return;
+    }
+    // if (thccw < 0 || thcw < 0 || thccw > 360 || thcw > 360) {
+    //     throw {
+    //         message: "gasket_steiner() takes arguments thccw and thcw, angles on interval [0; 360)!"
+    //     };
+    // }
+    var avgth = fixang((thccw+thcw)/2);
+    var shiftth = avgth;
+    var piecth = 0;
+    if (fixang(thccw-thcw)<0) {
+        avgth += 180;
+    }
+    var offth = fixang(thccw-avgth);
+    
+    var inv_th;
+    if (offth < 180) {
+        inv_th = get_inv_a1a2(circ1, 360/n*n2, offth);
+    }
+    else {
+        inv_th = get_inv_a1a2(circ1, 180+360/n*n2, offth);
+        if (n%2 >= 1) {
+            piecth += 360/n/2;
+        }
+    }
+    var steinersocket1 = new SteinerSocket(circ1, n, shiftth, avgth+inv_th/2, avgth-inv_th/2);
+    // steinersocket1.inv.render();
+    // steinersocket1.inv_mirror.render();
+    // var pt_ccw = new Point(circ1.x+circ1.r*cos(thccw), circ1.y+circ1.r*sin(thccw));
+    // pt_ccw.render();
+    // var pt_cw = new Point(circ1.x+circ1.r*cos(thcw), circ1.y+circ1.r*sin(thcw));
+    // pt_cw.render();
+    // var pt_avgth = new Point(circ1.x+circ1.r*cos(avgth), circ1.y+circ1.r*sin(avgth));
+    // pt_avgth.render();
+    var s = new Circle(circ1.x, circ1.y, circ1.r*(1-sin(360/n/2))/(1+sin(360/n/2)));
+    // var sdis = dist(s.x, s.y, circ1.x, circ1.y);
+    // var sth  = atan2(s.y-circ1.y, s.x-circ1.x)+steinersocket1.shiftth+piecth;
+        // s.x = circ1.x+sdis*cos(sth);
+        // s.y = circ1.y+sdis*sin(sth);
+        s = invert_circle(s, steinersocket1.inv);
+        s = invert_circle(s, steinersocket1.inv_mirror);
+        var sdis = dist(s.x, s.y, circ1.x, circ1.y);
+        var sth  = atan2(s.y-circ1.y, s.x-circ1.x)+steinersocket1.shiftth+180;
+        s.x = circ1.x+sdis*cos(sth);
+        s.y = circ1.y+sdis*sin(sth);
+    // steinersocket1.inv_mirror.render();
+    // fill(colors[iterations%colors.length]);
+    s.render();
+    // gasket_steiner(iterations, s, n, n2, thccw, thcw);
+    var c_middle = [];
+    for (var i=0; i<n; ++i) {
+        // if (i >= 1) {
+        //     fill(0, 0, 0, 80);
+        // }
+        // if (i >= 2) {
+        //     fill(0, 0, 100, 80);
+        // }
+        var dis = 1/(1+sin(360/n/2));
+        c_middle[i] = new Circle(
+            circ1.x+circ1.r*dis*cos(i*360/n),
+            circ1.y+circ1.r*dis*sin(i*360/n),
+            circ1.r*sin(360/n/2)/(1+sin(360/n/2))
+        );
+        var cdis = dist(c_middle[i].x, c_middle[i].y, circ1.x, circ1.y);
+        var cth  = atan2(c_middle[i].y-circ1.y, c_middle[i].x-circ1.x)+steinersocket1.shiftth+piecth;
+        c_middle[i].x = circ1.x+cdis*cos(cth);
+        c_middle[i].y = circ1.y+cdis*sin(cth);
+        c_middle[i] = invert_circle(c_middle[i], steinersocket1.inv);
+        c_middle[i] = invert_circle(c_middle[i], steinersocket1.inv_mirror);
+        cdis = dist(c_middle[i].x, c_middle[i].y, circ1.x, circ1.y);
+        cth  = atan2(c_middle[i].y-circ1.y, c_middle[i].x-circ1.x)+steinersocket1.shiftth+180;
+        c_middle[i].x = circ1.x+cdis*cos(cth);
+        c_middle[i].y = circ1.y+cdis*sin(cth);
+        c_middle[i].render();
+    }
+    for (var i=0; i<n; ++i) {
+        var c_ccw = c_middle[(c_middle.length+i+1)%c_middle.length];
+        var c_cw  = c_middle[(c_middle.length+i-1)%c_middle.length];
+        var th_ccw = atan2(c_ccw.y-c_middle[i].y, c_ccw.x-c_middle[i].x);
+        var th_cw  =  atan2(c_cw.y-c_middle[i].y, c_cw.x-c_middle[i].x);
+        if (fixang(th_ccw-th_cw) < 0) {
+            var th_cccw = th_ccw;
+            th_ccw = th_cw;
+            th_cw = th_cccw;
+        }
+        // ellipse(
+        //     c_middle[i].x+c_middle[i].r*cos(th_ccw),
+        //     c_middle[i].y+c_middle[i].r*sin(th_ccw),
+        //     8,
+        //     8
+        // );
+        // ellipse(
+        //     c_middle[i].x+c_middle[i].r*cos(th_cw),
+        //     c_middle[i].y+c_middle[i].r*sin(th_cw),
+        //     8,
+        //     8
+        // );
+        gasket_steiner(iterations, c_middle[i], n, n2, th_cw, th_ccw);
+        // break;
+    }
 };
 
 var gasket_tile_poincare = function(geodesic1_th1, geodesic1_th2, ncorn) {
@@ -533,7 +743,7 @@ var fill_poincare = function(circ1, n, ncorn) {
         // lin1.render();
         // lin2.render();
         var tri0 = new PoincarePolySocket([]);
-        for (var i=0; i<=ncorn+1; ++i) {
+        for (var i=0; i<=ncorn*2-2; ++i) {
             var th1 = i*360/ncorn;
             var th2 = (i+1)*360/ncorn;
             if (i < ncorn) {
@@ -545,11 +755,11 @@ var fill_poincare = function(circ1, n, ncorn) {
                 tri0.vertecies.push(
                     new Point(circ1.x+abs(circ1.r)*cos(th1), circ1.y+abs(circ1.r)*sin(th1))
                 );
-                tri0.parents[i] = geodesi_circ;
+                tri0.parents[i%ncorn] = geodesi_circ;
             }
-            if (i >= 2) {
+            if (i >= ncorn-1) {
                 var trii = new PoincarePolySocket([]);
-                trii.vertecies[0] = tri0.vertecies[(i)%ncorn];
+                trii.vertecies[0] = tri0.vertecies[i%ncorn];
                 trii.parents[0] = tri0.parents[i%ncorn];
                 trii.parents[0].render();
                 // trii.vertecies[0].render();
@@ -565,12 +775,11 @@ var fill_poincare = function(circ1, n, ncorn) {
                         // trii.vertecies[ii].render();
                     }
                     trii.parents[ii] = geodesii_circ;
-                    // trii.parents[ii].render();
+                    trii.parents[ii].render();
                 }
                 trii.vertecies[ncorn-1] = tri0.vertecies[(i+1)%ncorn];
                 // trii.vertecies[ncorn-1].render();
                 trii.render();
-                // break;
             }
         }
         // tri0.render();
@@ -581,33 +790,42 @@ var fill_poincare = function(circ1, n, ncorn) {
     };
 };
 
+
+
 background(255);
 translate(200, 200);
 scale(1, -1);
-scale(1);
-strokeWeight(3);
-stroke(0, 150, 260, 100);
-line(-1e4, 0, 1e4, 0);
-line(0, -1e4, 0, 1e4);
 strokeWeight(1);
-stroke(0);
-fill(255, 0, 0, 100);
-
-// noFill();
-
-
-var bob = new Circle(0, 0, -148);
-bob.render();
-
-var poincare1 = fill_poincare(bob, Infinity, 3, 0.0, 0.0);
-for (var c in poincare1.circles) {
-    poincare1.circles[c].render();
+stroke(0, 75, 155, 60);
+for (var lx=-10; lx<=10; ++lx) {
+    line(-500, lx*supredist/30, 500, lx*supredist/30);
+    line(lx*supredist/30, -500, lx*supredist/30, 500);
 }
 
+/*
+    strokeWeight(1);
+    stroke(0);
+    fill(255, 0, 0, 100);
+    var bob = new Circle(0, 0, -148);
+    bob.render();
+    
+    var poincare1 = fill_poincare(bob, Infinity, 4, 0.0, 0.0);
+    for (var c in poincare1.circles) {
+        poincare1.circles[c].render();
+    }
+/**/
+
+// /*
+strokeWeight(1);
+stroke(0, 0, 100);
+var bob = new Circle(0, 0, 190);
+bob.render();
+var n = 6;
+var n2 = 1;
+gasket_steiner(4, bob, n, n2, 360/n*(n-n2*2), 0);
+/**/
+
 resetMatrix();
-
-
-
 
 
 
